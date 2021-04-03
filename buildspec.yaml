@@ -1,0 +1,6 @@
+version: 0.2
+phases:
+  build:
+    commands:
+      - sam build
+      - sam deploy --stack-name serverless-api-service --s3-bucket serverless-api-service --capabilities CAPABILITY_NAMED_IAM

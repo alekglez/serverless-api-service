@@ -1,0 +1,222 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  Serverless API Service | Architecture for APIs using API Gateway, Lambda and FastAPI framework...
+
+Resources:
+  FastApiServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: FastApiServiceRole
+      Description: Role for all resources into the service...
+
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+      Policies:
+        - PolicyName: CloudWatchPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Resource: "*"
+                Action:
+                  - logs:*
+
+        - PolicyName: DynamoPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Resource: !GetAtt DynamoDBTable.Arn
+                Action:
+                  - dynamodb:*
+
+  FastApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      OpenApiVersion: "3.0.0"
+
+  FastApiLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-FastApiLambda
+      Description: >
+        Lambda to handle request...
+
+      CodeUri: ./
+      Handler: main.handler
+      Role: !GetAtt FastApiServiceRole.Arn
+
+      Runtime: python3.8
+      MemorySize: 128
+      Timeout: 300
+
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+            RestApiId:
+              Ref: FastApiGateway
+
+      Environment:
+        Variables:
+          REGION: us-east-1
+          ACTIVE_SERVICES: MockService,DynamoService
+
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: users
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  CodeBuildSourceCredential:
+    Type: AWS::CodeBuild::SourceCredential
+    Properties:
+      ServerType: GITHUB
+      AuthType: PERSONAL_ACCESS_TOKEN
+      Token: "{{resolve:secretsmanager:github_personal_access_token:SecretString:github_personal_access_token}}"
+
+  FastApiCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: serverless-api-service-deployment
+      Description: Build process for the service using the SAM template...
+      ServiceRole: !GetAtt FastApiServiceCodeBuildRole.Arn
+      Artifacts:
+        Name: code-build-artifacts
+        Type: S3
+        Location: serverless-api-service
+        Path: ""
+        NamespaceType: NONE
+        Packaging: NONE
+
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:2.0
+
+      Source:
+        Location: https://github.com/alekglez/serverless-api-service.git
+        Type: GITHUB
+        GitCloneDepth: 1
+        Auth:
+          Resource: !Ref CodeBuildSourceCredential
+          Type: OAUTH
+
+      Triggers:
+        Webhook: true
+        FilterGroups:
+          - - Type: EVENT
+              Pattern: PUSH
+              ExcludeMatchedPattern: false
+
+      BadgeEnabled: false
+
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+
+        S3Logs:
+          Status: DISABLED
+          EncryptionDisabled: false
+
+      TimeoutInMinutes: 10
+
+  FastApiServiceCodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: FastApiServiceCodeBuildRole
+      Description: Access...
+
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+                - lambda.amazonaws.com
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSLambda_FullAccess
+        - arn:aws:iam::aws:policy/AmazonAPIGatewayAdministrator
+        - arn:aws:iam::aws:policy/AWSCloudFormationFullAccess
+
+      Policies:
+        - PolicyName: CodeBuildLogsPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Resource:
+                  - "*"
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+
+        - PolicyName: CodeBuildCodePipelineBucketPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Resource:
+                  - "arn:aws:s3:::codepipeline-us-east-1-*"
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+
+        - PolicyName: CodeBuildDeploymentBucketPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Resource:
+                  - "*"
+                Action:
+                  - s3:*
+
+        - PolicyName: CodeBuildCodeBuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Resource:
+                  - "*"
+                Action:
+                  - codebuild:CreateReportGroup
+                  - codebuild:CreateReport
+                  - codebuild:UpdateReport
+                  - codebuild:BatchPutTestCases
+                  - codebuild:ImportSourceCredentials

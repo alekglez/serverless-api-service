@@ -1,0 +1,5 @@
+-r project/requirements.txt
+
+click==7.1.2
+coverage==5.5
+requests==2.25.1
